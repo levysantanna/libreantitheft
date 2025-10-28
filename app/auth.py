@@ -77,30 +77,39 @@ def get_current_user(
     db: Session = Depends(get_db)
 ) -> User:
     """Get the current authenticated user"""
-    token = credentials.credentials
-    payload = verify_token(token, "access")
-    
-    user_id: int = payload.get("sub")
-    if user_id is None:
+    try:
+        token = credentials.credentials
+        payload = verify_token(token, "access")
+        
+        user_id: int = payload.get("sub")
+        if user_id is None:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Could not validate credentials"
+            )
+        
+        user = db.query(User).filter(User.id == user_id).first()
+        if user is None:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="User not found"
+            )
+        
+        if not user.is_active:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Inactive user"
+            )
+        
+        return user
+    except Exception as e:
+        db.close()
+        if isinstance(e, HTTPException):
+            raise e
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Could not validate credentials"
+            detail=f"Authentication error: {str(e)}"
         )
-    
-    user = db.query(User).filter(User.id == user_id).first()
-    if user is None:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="User not found"
-        )
-    
-    if not user.is_active:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Inactive user"
-        )
-    
-    return user
 
 
 def get_current_active_user(current_user: User = Depends(get_current_user)) -> User:

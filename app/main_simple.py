@@ -11,7 +11,7 @@ from typing import List
 import os
 
 from app.config import settings
-from app.database import get_db, engine, Base
+from app.database import get_db, engine, Base, close_db
 from app.models import User, Device, Location, RefreshToken
 from app.schemas import (
     UserCreate, UserResponse, UserUpdate,
@@ -221,32 +221,38 @@ async def create_device(
     db: Session = Depends(get_db)
 ):
     """Create a new device for tracking"""
-    # Generate unique device ID and secret
-    device_id = f"device_{secrets.token_urlsafe(16)}"
-    secret_key = generate_device_secret()
-    hashed_secret = hash_device_key(device_id, secret_key)
-    
-    db_device = Device(
-        name=device_data.name,
-        device_id=device_id,
-        secret_key=hashed_secret,
-        owner_id=current_user.id
-    )
-    
-    db.add(db_device)
-    db.commit()
-    db.refresh(db_device)
-    
-    # Return device with secret (only shown once)
-    return DeviceWithSecret(
-        id=db_device.id,
-        name=db_device.name,
-        device_id=db_device.device_id,
-        secret_key=secret_key,
-        is_active=db_device.is_active,
-        last_seen=db_device.last_seen,
-        created_at=db_device.created_at
-    )
+    try:
+        # Generate unique device ID and secret
+        device_id = f"device_{secrets.token_urlsafe(16)}"
+        secret_key = generate_device_secret()
+        hashed_secret = hash_device_key(device_id, secret_key)
+        
+        db_device = Device(
+            name=device_data.name,
+            device_id=device_id,
+            secret_key=hashed_secret,
+            owner_id=current_user.id
+        )
+        
+        db.add(db_device)
+        db.commit()
+        db.refresh(db_device)
+        
+        # Return device with secret (only shown once)
+        return DeviceWithSecret(
+            id=db_device.id,
+            name=db_device.name,
+            device_id=db_device.device_id,
+            secret_key=secret_key,  # Return the original secret key, not the hash
+            is_active=db_device.is_active,
+            last_seen=db_device.last_seen,
+            created_at=db_device.created_at
+        )
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Error creating device: {str(e)}")
+    finally:
+        close_db()
 
 @app.get("/devices", response_model=List[DeviceResponse])
 async def get_devices(
@@ -254,47 +260,114 @@ async def get_devices(
     db: Session = Depends(get_db)
 ):
     """Get all devices for the current user"""
-    devices = db.query(Device).filter(Device.owner_id == current_user.id).all()
-    return devices
+    try:
+        devices = db.query(Device).filter(Device.owner_id == current_user.id).all()
+        return devices
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error fetching devices: {str(e)}")
+    finally:
+        close_db()
+
+@app.delete("/devices/{device_id}")
+async def delete_device(
+    device_id: str, 
+    current_user: User = Depends(get_current_active_user), 
+    db: Session = Depends(get_db)
+):
+    """Delete a device"""
+    try:
+        device = db.query(Device).filter(
+            Device.device_id == device_id,
+            Device.owner_id == current_user.id
+        ).first()
+        
+        if not device:
+            raise HTTPException(status_code=404, detail="Device not found")
+        
+        db.delete(device)
+        db.commit()
+        
+        return {"message": "Device deleted successfully"}
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Error deleting device: {str(e)}")
+    finally:
+        close_db()
 
 # OsmAnd integration endpoint
-@app.post("/osmand/tracker")
+@app.get("/osmand/tracker")
 async def receive_location_data(
-    lat: float,
-    lon: float,
-    timestamp: int,
-    hdop: float = None,
-    altitude: float = None,
-    speed: float = None,
+    lat: str,
+    lon: str,
+    timestamp: str,
+    hdop: str = None,
+    altitude: str = None,
+    speed: str = None,
     key: str = None,
     db: Session = Depends(get_db)
 ):
     """Receive location data from OsmAnd devices"""
+    print(f"OsmAnd data received: lat={lat}, lon={lon}, timestamp={timestamp}, key={key}")
+    
     if not key:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Secret key required"
         )
     
-    # Find device by secret key (simplified for demo)
-    device = db.query(Device).filter(Device.is_active == True).first()
+    # Skip if placeholders are still in the URL (OsmAnd hasn't replaced them yet)
+    if lat.startswith('{') or lon.startswith('{') or timestamp.startswith('{'):
+        print("Skipping request with placeholders")
+        return {"status": "skipped", "message": "Placeholders not replaced yet"}
+    
+    try:
+        # Convert string parameters to appropriate types
+        lat_float = float(lat)
+        lon_float = float(lon)
+        timestamp_int = int(timestamp)
+        hdop_float = float(hdop) if hdop and hdop != 'None' else None
+        altitude_float = float(altitude) if altitude and altitude != 'None' else None
+        speed_float = float(speed) if speed and speed != 'None' else None
+        print(f"Converted parameters: lat={lat_float}, lon={lon_float}, timestamp={timestamp_int}")
+    except (ValueError, TypeError) as e:
+        print(f"Error converting parameters: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Invalid parameter format: {str(e)}"
+        )
+    
+    # Find device by secret key (compare with hash)
+    from app.auth import hash_device_key, verify_device_key
+    
+    # Find device by checking all devices
+    devices = db.query(Device).filter(Device.is_active == True).all()
+    device = None
+    for d in devices:
+        if verify_device_key(d.device_id, key, d.secret_key):
+            device = d
+            break
+    
     if not device:
+        print(f"Device not found for key: {key}")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid device key"
         )
     
-    # Convert timestamp
-    location_timestamp = datetime.fromtimestamp(timestamp)
+    # Convert timestamp (handle both seconds and milliseconds)
+    if timestamp_int > 10000000000:  # If timestamp is in milliseconds
+        timestamp_int = timestamp_int // 1000
+    location_timestamp = datetime.fromtimestamp(timestamp_int)
+    print(f"Converted timestamp: {location_timestamp}")
     
     # Create location record
     location = Location(
         device_id=device.id,
-        latitude=lat,
-        longitude=lon,
-        altitude=altitude,
-        speed=speed,
-        hdop=hdop,
+        latitude=lat_float,
+        longitude=lon_float,
+        altitude=altitude_float,
+        speed=speed_float,
+        hdop=hdop_float,
         timestamp=location_timestamp
     )
     
@@ -321,6 +394,7 @@ async def receive_location_data(
     if len(location_updates) > 100:
         location_updates.pop(0)
     
+    print(f"Location saved: lat={lat_float}, lon={lon_float}, device={device.device_id}")
     return {"status": "success", "message": "Location data received"}
 
 # Dashboard endpoints
@@ -380,6 +454,39 @@ async def get_dashboard_devices(
         ))
     
     return result
+
+# Serve favicon
+@app.get("/favicon.ico")
+async def favicon():
+    return {"message": "No favicon"}
+
+# Serve test page
+@app.get("/test.html", response_class=HTMLResponse)
+async def serve_test():
+    """Serve the test page"""
+    with open("test.html", "r") as f:
+        return HTMLResponse(content=f.read())
+
+# Serve debug page
+@app.get("/debug.html", response_class=HTMLResponse)
+async def serve_debug():
+    """Serve the debug page"""
+    with open("debug.html", "r") as f:
+        return HTMLResponse(content=f.read())
+
+# Serve URL test page
+@app.get("/url_test.html", response_class=HTMLResponse)
+async def serve_url_test():
+    """Serve the URL test page"""
+    with open("url_test.html", "r") as f:
+        return HTMLResponse(content=f.read())
+
+# Serve simple test page
+@app.get("/simple_test.html", response_class=HTMLResponse)
+async def serve_simple_test():
+    """Serve the simple test page"""
+    with open("simple_test.html", "r") as f:
+        return HTMLResponse(content=f.read())
 
 # Serve the dashboard
 @app.get("/", response_class=HTMLResponse)

@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>URL Test</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; }
+        .test { background: #f0f0f0; padding: 10px; margin: 10px 0; border-radius: 5px; }
+        textarea { width: 100%; height: 100px; }
+        button { padding: 10px 20px; margin: 5px; }
+    </style>
+</head>
+<body>
+    <h1>URL Generation Test</h1>
+    
+    <div class="test">
+        <h3>Test URL Generation</h3>
+        <button onclick="testUrlGeneration()">Generate Test URL</button>
+        <div id="result"></div>
+    </div>
+
+    <script>
+        function testUrlGeneration() {
+            // Simulate device data
+            const device = {
+                secret_key: "HTEMFavVRIORHCrtSKKrsx-Gul_fWh-OJZSKmT1UiPg"
+            };
+            
+            const API_BASE = window.location.origin;
+            const url = `${API_BASE}/osmand/tracker?lat={0}&lon={1}&timestamp={2}&hdop={3}&altitude={4}&speed={5}&key=${device.secret_key}`;
+            
+            document.getElementById('result').innerHTML = `
+                <h4>Generated URL:</h4>
+                <textarea readonly>${url}</textarea>
+                <br><br>
+                <button onclick="navigator.clipboard.writeText('${url}').then(() => alert('URL copied!'))">Copy URL</button>
+            `;
+        }
+    </script>
+</body>
+</html>

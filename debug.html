@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Debug LibreAntiTheft</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; }
+        .debug { background: #f0f0f0; padding: 10px; margin: 10px 0; border-radius: 5px; }
+        .error { background: #ffebee; color: #c62828; }
+        .success { background: #e8f5e8; color: #2e7d32; }
+        button { padding: 10px 20px; margin: 5px; }
+        textarea { width: 100%; height: 100px; }
+    </style>
+</head>
+<body>
+    <h1>Debug LibreAntiTheft</h1>
+    
+    <div class="debug">
+        <h3>Step 1: Test API Health</h3>
+        <button onclick="testHealth()">Test Health</button>
+        <div id="healthResult"></div>
+    </div>
+
+    <div class="debug">
+        <h3>Step 2: Register User</h3>
+        <input type="text" id="username" placeholder="Username" value="debuguser">
+        <input type="email" id="email" placeholder="Email" value="debug@example.com">
+        <input type="password" id="password" placeholder="Password" value="DebugPass123">
+        <button onclick="registerUser()">Register</button>
+        <div id="registerResult"></div>
+    </div>
+
+    <div class="debug">
+        <h3>Step 3: Login</h3>
+        <button onclick="loginUser()">Login</button>
+        <div id="loginResult"></div>
+    </div>
+
+    <div class="debug">
+        <h3>Step 4: Create Device</h3>
+        <input type="text" id="deviceName" placeholder="Device Name" value="Debug Device">
+        <button onclick="createDevice()">Create Device</button>
+        <div id="deviceResult"></div>
+    </div>
+
+    <div class="debug">
+        <h3>Step 5: Generate OsmAnd URL</h3>
+        <button onclick="generateUrl()">Generate URL</button>
+        <div id="urlResult"></div>
+    </div>
+
+    <script>
+        let accessToken = null;
+        let device = null;
+
+        async function testHealth() {
+            try {
+                const response = await fetch('/health');
+                const data = await response.json();
+                document.getElementById('healthResult').innerHTML = 
+                    `<div class="success">✅ Health check passed: ${JSON.stringify(data)}</div>`;
+            } catch (error) {
+                document.getElementById('healthResult').innerHTML = 
+                    `<div class="error">❌ Health check failed: ${error.message}</div>`;
+            }
+        }
+
+        async function registerUser() {
+            try {
+                const response = await fetch('/auth/register', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        username: document.getElementById('username').value,
+                        email: document.getElementById('email').value,
+                        password: document.getElementById('password').value
+                    })
+                });
+                
+                if (response.ok) {
+                    const data = await response.json();
+                    document.getElementById('registerResult').innerHTML = 
+                        `<div class="success">✅ User registered: ${data.username}</div>`;
+                } else {
+                    const error = await response.text();
+                    document.getElementById('registerResult').innerHTML = 
+                        `<div class="error">❌ Registration failed: ${error}</div>`;
+                }
+            } catch (error) {
+                document.getElementById('registerResult').innerHTML = 
+                    `<div class="error">❌ Registration error: ${error.message}</div>`;
+            }
+        }
+
+        async function loginUser() {
+            try {
+                const response = await fetch('/auth/login', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        username: document.getElementById('username').value,
+                        password: document.getElementById('password').value
+                    })
+                });
+                
+                if (response.ok) {
+                    const data = await response.json();
+                    accessToken = data.access_token;
+                    document.getElementById('loginResult').innerHTML = 
+                        `<div class="success">✅ Login successful! Token: ${accessToken.substring(0, 20)}...</div>`;
+                } else {
+                    const error = await response.text();
+                    document.getElementById('loginResult').innerHTML = 
+                        `<div class="error">❌ Login failed: ${error}</div>`;
+                }
+            } catch (error) {
+                document.getElementById('loginResult').innerHTML = 
+                    `<div class="error">❌ Login error: ${error.message}</div>`;
+            }
+        }
+
+        async function createDevice() {
+            if (!accessToken) {
+                document.getElementById('deviceResult').innerHTML = 
+                    `<div class="error">❌ Please login first!</div>`;
+                return;
+            }
+
+            try {
+                const response = await fetch('/devices', {
+                    method: 'POST',
+                    headers: {
+                        'Authorization': `Bearer ${accessToken}`,
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        name: document.getElementById('deviceName').value
+                    })
+                });
+                
+                if (response.ok) {
+                    device = await response.json();
+                    document.getElementById('deviceResult').innerHTML = 
+                        `<div class="success">✅ Device created: ${device.name}<br>
+                        Device ID: ${device.device_id}<br>
+                        Secret Key: ${device.secret_key}</div>`;
+                } else {
+                    const error = await response.text();
+                    document.getElementById('deviceResult').innerHTML = 
+                        `<div class="error">❌ Device creation failed: ${error}</div>`;
+                }
+            } catch (error) {
+                document.getElementById('deviceResult').innerHTML = 
+                    `<div class="error">❌ Device creation error: ${error.message}</div>`;
+            }
+        }
+
+        function generateUrl() {
+            if (!device) {
+                document.getElementById('urlResult').innerHTML = 
+                    `<div class="error">❌ Please create a device first!</div>`;
+                return;
+            }
+
+            const url = `${window.location.origin}/osmand/tracker?lat={0}&lon={1}&timestamp={2}&hdop={3}&altitude={4}&speed={5}&key=${device.secret_key}`;
+            document.getElementById('urlResult').innerHTML = 
+                `<div class="success">✅ OsmAnd URL Generated:<br>
+                <textarea readonly>${url}</textarea><br>
+                <button onclick="navigator.clipboard.writeText('${url}').then(() => alert('URL copied!'))">Copy URL</button></div>`;
+        }
+
+        // Auto-run health check on load
+        window.onload = testHealth;
+    </script>
+</body>
+</html>

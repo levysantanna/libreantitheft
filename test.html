@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Test LibreAntiTheft</title>
+</head>
+<body>
+    <h1>Test LibreAntiTheft</h1>
+    <button onclick="testDeviceCreation()">Test Device Creation</button>
+    <div id="result"></div>
+
+    <script>
+        async function testDeviceCreation() {
+            try {
+                // First login
+                const loginResponse = await fetch('http://localhost:8000/auth/login', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        username: 'testuser',
+                        password: 'TestPass123'
+                    })
+                });
+
+                if (!loginResponse.ok) {
+                    throw new Error('Login failed');
+                }
+
+                const loginData = await loginResponse.json();
+                console.log('Login successful:', loginData);
+
+                // Create device
+                const deviceResponse = await fetch('http://localhost:8000/devices', {
+                    method: 'POST',
+                    headers: {
+                        'Authorization': `Bearer ${loginData.access_token}`,
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        name: 'Test Device from Frontend'
+                    })
+                });
+
+                if (!deviceResponse.ok) {
+                    throw new Error('Device creation failed');
+                }
+
+                const device = await deviceResponse.json();
+                console.log('Device created:', device);
+
+                // Generate URL
+                const url = `http://localhost:8000/osmand/tracker?lat={0}&lon={1}&timestamp={2}&hdop={3}&altitude={4}&speed={5}&key=${device.secret_key}`;
+                
+                document.getElementById('result').innerHTML = `
+                    <h3>Device Created Successfully!</h3>
+                    <p><strong>Device Name:</strong> ${device.name}</p>
+                    <p><strong>Device ID:</strong> ${device.device_id}</p>
+                    <p><strong>Secret Key:</strong> ${device.secret_key}</p>
+                    <p><strong>OsmAnd URL:</strong></p>
+                    <textarea style="width: 100%; height: 100px;">${url}</textarea>
+                `;
+
+            } catch (error) {
+                console.error('Error:', error);
+                document.getElementById('result').innerHTML = `<p style="color: red;">Error: ${error.message}</p>`;
+            }
+        }
+    </script>
+</body>
+</html>

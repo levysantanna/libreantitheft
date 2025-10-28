@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Simple Auth Test</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; }
+        .test { background: #f0f0f0; padding: 10px; margin: 10px 0; border-radius: 5px; }
+        button { padding: 10px 20px; margin: 5px; }
+        input { padding: 8px; margin: 5px; width: 200px; }
+        .result { background: #e8f5e8; padding: 10px; margin: 10px 0; border-radius: 5px; }
+        .error { background: #ffe8e8; padding: 10px; margin: 10px 0; border-radius: 5px; }
+    </style>
+</head>
+<body>
+    <h1>Simple Authentication Test</h1>
+    
+    <div class="test">
+        <h3>1. Register User</h3>
+        <input type="text" id="regUsername" placeholder="Username" value="testuser4">
+        <input type="email" id="regEmail" placeholder="Email" value="test4@example.com">
+        <input type="password" id="regPassword" placeholder="Password" value="TestPass123">
+        <input type="text" id="regFullName" placeholder="Full Name" value="Test User 4">
+        <br>
+        <button onclick="register()">Register</button>
+        <div id="regResult"></div>
+    </div>
+
+    <div class="test">
+        <h3>2. Login</h3>
+        <input type="text" id="loginUsername" placeholder="Username" value="testuser4">
+        <input type="password" id="loginPassword" placeholder="Password" value="TestPass123">
+        <br>
+        <button onclick="login()">Login</button>
+        <div id="loginResult"></div>
+    </div>
+
+    <div class="test">
+        <h3>3. Create Device</h3>
+        <input type="text" id="deviceName" placeholder="Device Name" value="Test Device">
+        <br>
+        <button onclick="createDevice()">Create Device</button>
+        <div id="deviceResult"></div>
+    </div>
+
+    <div class="test">
+        <h3>4. Get Devices</h3>
+        <button onclick="getDevices()">Get Devices</button>
+        <div id="devicesResult"></div>
+    </div>
+
+    <script>
+        const API_BASE = window.location.origin;
+        let accessToken = null;
+
+        function showResult(elementId, message, isError = false) {
+            const element = document.getElementById(elementId);
+            element.innerHTML = `<div class="${isError ? 'error' : 'result'}">${message}</div>`;
+        }
+
+        async function register() {
+            const username = document.getElementById('regUsername').value;
+            const email = document.getElementById('regEmail').value;
+            const password = document.getElementById('regPassword').value;
+            const fullName = document.getElementById('regFullName').value;
+
+            try {
+                const response = await fetch(`${API_BASE}/auth/register`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ username, email, password, full_name: fullName })
+                });
+
+                const data = await response.json();
+                if (response.ok) {
+                    showResult('regResult', `Registration successful: ${JSON.stringify(data)}`);
+                } else {
+                    showResult('regResult', `Registration failed: ${JSON.stringify(data)}`, true);
+                }
+            } catch (error) {
+                showResult('regResult', `Error: ${error.message}`, true);
+            }
+        }
+
+        async function login() {
+            const username = document.getElementById('loginUsername').value;
+            const password = document.getElementById('loginPassword').value;
+
+            try {
+                const response = await fetch(`${API_BASE}/auth/login`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ username, password })
+                });
+
+                const data = await response.json();
+                if (response.ok) {
+                    accessToken = data.access_token;
+                    localStorage.setItem('accessToken', accessToken);
+                    showResult('loginResult', `Login successful! Token: ${accessToken.substring(0, 50)}...`);
+                } else {
+                    showResult('loginResult', `Login failed: ${JSON.stringify(data)}`, true);
+                }
+            } catch (error) {
+                showResult('loginResult', `Error: ${error.message}`, true);
+            }
+        }
+
+        async function createDevice() {
+            const deviceName = document.getElementById('deviceName').value;
+
+            if (!accessToken) {
+                showResult('deviceResult', 'No access token! Please login first.', true);
+                return;
+            }
+
+            try {
+                console.log('Creating device with token:', accessToken);
+                const response = await fetch(`${API_BASE}/devices`, {
+                    method: 'POST',
+                    headers: {
+                        'Authorization': `Bearer ${accessToken}`,
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ name: deviceName })
+                });
+
+                const data = await response.json();
+                console.log('Device creation response:', response.status, data);
+                
+                if (response.ok) {
+                    showResult('deviceResult', `Device created successfully: ${JSON.stringify(data)}`);
+                } else {
+                    showResult('deviceResult', `Device creation failed: ${JSON.stringify(data)}`, true);
+                }
+            } catch (error) {
+                showResult('deviceResult', `Error: ${error.message}`, true);
+            }
+        }
+
+        async function getDevices() {
+            if (!accessToken) {
+                showResult('devicesResult', 'No access token! Please login first.', true);
+                return;
+            }
+
+            try {
+                const response = await fetch(`${API_BASE}/devices`, {
+                    headers: { 'Authorization': `Bearer ${accessToken}` }
+                });
+
+                const data = await response.json();
+                if (response.ok) {
+                    showResult('devicesResult', `Devices: ${JSON.stringify(data)}`);
+                } else {
+                    showResult('devicesResult', `Failed to get devices: ${JSON.stringify(data)}`, true);
+                }
+            } catch (error) {
+                showResult('devicesResult', `Error: ${error.message}`, true);
+            }
+        }
+
+        // Load token on page load
+        window.addEventListener('load', function() {
+            accessToken = localStorage.getItem('accessToken');
+            if (accessToken) {
+                console.log('Loaded token from localStorage:', accessToken.substring(0, 50) + '...');
+            }
+        });
+    </script>
+</body>
+</html>
