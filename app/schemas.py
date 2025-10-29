@@ -72,6 +72,39 @@ class DeviceWithSecret(DeviceResponse):
     secret_key: str
 
 
+# Device Configuration Schemas
+class DeviceConfigBase(BaseModel):
+    server_url: str
+    websocket_url: Optional[str] = None
+    api_endpoint: Optional[str] = None
+
+
+class DeviceConfigCreate(DeviceConfigBase):
+    pass
+
+
+class DeviceConfigUpdate(BaseModel):
+    server_url: Optional[str] = None
+    websocket_url: Optional[str] = None
+    api_endpoint: Optional[str] = None
+    is_configured: Optional[bool] = None
+
+
+class DeviceConfigResponse(DeviceConfigBase):
+    id: int
+    device_id: str
+    is_configured: bool
+    last_config_update: datetime
+    created_at: datetime
+    
+    class Config:
+        from_attributes = True
+
+
+class DeviceWithConfig(DeviceResponse):
+    config: Optional[DeviceConfigResponse] = None
+
+
 # Location Schemas
 class LocationBase(BaseModel):
     latitude: float

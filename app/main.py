@@ -14,10 +14,11 @@ import os
 
 from app.config import settings
 from app.database import get_db, engine, Base
-from app.models import User, Device, Location, RefreshToken
+from app.models import User, Device, Location, RefreshToken, DeviceConfig
 from app.schemas import (
     UserCreate, UserResponse, UserUpdate,
     DeviceCreate, DeviceResponse, DeviceUpdate, DeviceWithSecret,
+    DeviceConfigCreate, DeviceConfigResponse, DeviceConfigUpdate, DeviceWithConfig,
     LocationCreate, LocationResponse,
     LoginRequest, TokenResponse, RefreshTokenRequest,
     MfaSetupResponse, MfaVerifyRequest,
@@ -35,8 +36,13 @@ from app.mfa import (
     enable_mfa_for_user, disable_mfa_for_user, is_mfa_required
 )
 
-# Redis connection for real-time features
-redis_client = redis.from_url(settings.redis_url, decode_responses=True)
+# Redis connection for real-time features (optional)
+try:
+    redis_client = redis.from_url(settings.redis_url, decode_responses=True)
+    redis_client.ping()  # Test connection
+except:
+    redis_client = None
+    print("Warning: Redis not available, real-time features disabled")
 
 
 @asynccontextmanager
@@ -45,7 +51,8 @@ async def lifespan(app: FastAPI):
     Base.metadata.create_all(bind=engine)
     yield
     # Shutdown
-    redis_client.close()
+    if redis_client:
+        redis_client.close()
 
 
 app = FastAPI(
@@ -77,6 +84,9 @@ app.mount("/static", StaticFiles(directory="app/static"), name="static")
 # Rate limiting decorator
 def rate_limit(request: Request):
     """Simple rate limiting based on IP"""
+    if not redis_client:
+        return  # Skip rate limiting if Redis not available
+    
     client_ip = request.client.host
     key = f"rate_limit:{client_ip}"
     
@@ -315,6 +325,19 @@ async def create_device(
     db.commit()
     db.refresh(db_device)
     
+    # Create device configuration with default URLs
+    base_url = f"http://{settings.host}:{settings.port}"
+    device_config = DeviceConfig(
+        device_id=device_id,
+        server_url=base_url,
+        websocket_url=f"ws://{settings.host}:{settings.port}/ws",
+        api_endpoint=f"{base_url}/osmand/tracker",
+        is_configured=True
+    )
+    
+    db.add(device_config)
+    db.commit()
+    
     # Return device with secret (only shown once)
     return DeviceWithSecret(
         id=db_device.id,
@@ -327,14 +350,28 @@ async def create_device(
     )
 
 
-@app.get("/devices", response_model=List[DeviceResponse])
+@app.get("/devices", response_model=List[DeviceWithConfig])
 async def get_devices(
     current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db)
 ):
-    """Get all devices for the current user"""
+    """Get all devices for the current user with their configurations"""
     devices = db.query(Device).filter(Device.owner_id == current_user.id).all()
-    return devices
+    
+    result = []
+    for device in devices:
+        # Get device configuration
+        config = db.query(DeviceConfig).filter(DeviceConfig.device_id == device.device_id).first()
+        
+        device_response = DeviceResponse.model_validate(device)
+        config_response = DeviceConfigResponse.model_validate(config) if config else None
+        
+        result.append(DeviceWithConfig(
+            **device_response.model_dump(),
+            config=config_response
+        ))
+    
+    return result
 
 
 @app.get("/devices/{device_id}", response_model=DeviceResponse)
@@ -412,6 +449,167 @@ async def delete_device(
     return {"message": "Device deleted successfully"}
 
 
+# Device configuration endpoints
+@app.get("/devices/{device_id}/config", response_model=DeviceConfigResponse)
+async def get_device_config(
+    device_id: int,
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    """Get device configuration"""
+    # First verify device ownership
+    device = db.query(Device).filter(
+        Device.id == device_id,
+        Device.owner_id == current_user.id
+    ).first()
+    
+    if not device:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Device not found"
+        )
+    
+    config = db.query(DeviceConfig).filter(DeviceConfig.device_id == device.device_id).first()
+    
+    if not config:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Device configuration not found"
+        )
+    
+    return config
+
+
+@app.put("/devices/{device_id}/config", response_model=DeviceConfigResponse)
+async def update_device_config(
+    device_id: int,
+    config_data: DeviceConfigUpdate,
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    """Update device configuration"""
+    # First verify device ownership
+    device = db.query(Device).filter(
+        Device.id == device_id,
+        Device.owner_id == current_user.id
+    ).first()
+    
+    if not device:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Device not found"
+        )
+    
+    config = db.query(DeviceConfig).filter(DeviceConfig.device_id == device.device_id).first()
+    
+    if not config:
+        # Create new configuration if it doesn't exist
+        config = DeviceConfig(
+            device_id=device.device_id,
+            server_url=config_data.server_url or f"http://{settings.host}:{settings.port}",
+            websocket_url=config_data.websocket_url or f"ws://{settings.host}:{settings.port}/ws",
+            api_endpoint=config_data.api_endpoint or f"http://{settings.host}:{settings.port}/osmand/tracker",
+            is_configured=True
+        )
+        db.add(config)
+    else:
+        # Update existing configuration
+        if config_data.server_url is not None:
+            config.server_url = config_data.server_url
+        if config_data.websocket_url is not None:
+            config.websocket_url = config_data.websocket_url
+        if config_data.api_endpoint is not None:
+            config.api_endpoint = config_data.api_endpoint
+        if config_data.is_configured is not None:
+            config.is_configured = config_data.is_configured
+        
+        config.last_config_update = datetime.utcnow()
+    
+    db.commit()
+    db.refresh(config)
+    
+    return config
+
+
+@app.get("/devices/{device_id}/urls")
+async def get_device_urls(
+    device_id: int,
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    """Get device URLs for easy access"""
+    # First verify device ownership
+    device = db.query(Device).filter(
+        Device.id == device_id,
+        Device.owner_id == current_user.id
+    ).first()
+    
+    if not device:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Device not found"
+        )
+    
+    config = db.query(DeviceConfig).filter(DeviceConfig.device_id == device.device_id).first()
+    
+    if not config:
+        # Return default URLs if no configuration exists
+        base_url = f"http://{settings.host}:{settings.port}"
+        return {
+            "device_id": device.device_id,
+            "server_url": base_url,
+            "websocket_url": f"ws://{settings.host}:{settings.port}/ws",
+            "api_endpoint": f"{base_url}/osmand/tracker",
+            "is_configured": False
+        }
+    
+    return {
+        "device_id": device.device_id,
+        "server_url": config.server_url,
+        "websocket_url": config.websocket_url,
+        "api_endpoint": config.api_endpoint,
+        "is_configured": config.is_configured,
+        "last_updated": config.last_config_update
+    }
+
+
+@app.post("/devices/migrate-configs")
+async def migrate_device_configs(
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    """Migrate existing devices to include URL configurations"""
+    # Get all devices for the current user that don't have configurations
+    devices = db.query(Device).filter(Device.owner_id == current_user.id).all()
+    
+    migrated_count = 0
+    base_url = f"http://{settings.host}:{settings.port}"
+    
+    for device in devices:
+        # Check if device already has configuration
+        existing_config = db.query(DeviceConfig).filter(DeviceConfig.device_id == device.device_id).first()
+        
+        if not existing_config:
+            # Create configuration for this device
+            device_config = DeviceConfig(
+                device_id=device.device_id,
+                server_url=base_url,
+                websocket_url=f"ws://{settings.host}:{settings.port}/ws",
+                api_endpoint=f"{base_url}/osmand/tracker",
+                is_configured=True
+            )
+            
+            db.add(device_config)
+            migrated_count += 1
+    
+    db.commit()
+    
+    return {
+        "message": f"Successfully migrated {migrated_count} devices with URL configurations",
+        "migrated_count": migrated_count
+    }
+
+
 # OsmAnd integration endpoint
 @app.post("/osmand/tracker")
 async def receive_location_data(
@@ -468,18 +666,19 @@ async def receive_location_data(
     
     db.commit()
     
-    # Publish to Redis for real-time updates
-    location_data = {
-        "device_id": device.id,
-        "device_name": device.name,
-        "latitude": lat,
-        "longitude": lon,
-        "altitude": altitude,
-        "speed": speed,
-        "timestamp": location_timestamp.isoformat()
-    }
-    
-    redis_client.publish("location_updates", json.dumps(location_data))
+    # Publish to Redis for real-time updates (if available)
+    if redis_client:
+        location_data = {
+            "device_id": device.id,
+            "device_name": device.name,
+            "latitude": lat,
+            "longitude": lon,
+            "altitude": altitude,
+            "speed": speed,
+            "timestamp": location_timestamp.isoformat()
+        }
+        
+        redis_client.publish("location_updates", json.dumps(location_data))
     
     return {"status": "success", "message": "Location data received"}
 
@@ -538,8 +737,8 @@ async def get_dashboard_devices(
             is_online = device.last_seen > datetime.utcnow() - timedelta(minutes=5)
         
         result.append(DeviceLocation(
-            device=DeviceResponse.from_orm(device),
-            latest_location=LocationResponse.from_orm(latest_location) if latest_location else None,
+            device=DeviceResponse.model_validate(device),
+            latest_location=LocationResponse.model_validate(latest_location) if latest_location else None,
             is_online=is_online
         ))
     

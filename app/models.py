@@ -77,6 +77,22 @@ class RefreshToken(Base):
     user = relationship("User", back_populates="refresh_tokens")
 
 
+class DeviceConfig(Base):
+    __tablename__ = "device_configs"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    device_id = Column(String(100), ForeignKey("devices.device_id"), nullable=False, unique=True)
+    server_url = Column(String(500), nullable=False)  # URL do servidor para o dispositivo
+    websocket_url = Column(String(500), nullable=True)  # URL do WebSocket
+    api_endpoint = Column(String(500), nullable=True)  # Endpoint específico da API
+    is_configured = Column(Boolean, default=False)
+    last_config_update = Column(DateTime(timezone=True), server_default=func.now())
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    
+    # Relationship
+    device = relationship("Device", backref="config")
+
+
 class LoginAttempt(Base):
     __tablename__ = "login_attempts"
     

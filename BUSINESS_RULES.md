@@ -35,6 +35,16 @@ LibreAntiTheft is a secure device tracking system that allows users to monitor t
 - **Authentication**: Each device has a unique secret key for OsmAnd integration
 - **Naming**: Users can assign custom names to their devices
 - **Status**: Devices can be activated/deactivated by their owners
+- **URL Persistence**: Device URLs are automatically saved and persist across system restarts
+
+#### Device URL Configuration
+- **Automatic Creation**: Device configurations are created automatically when devices are registered
+- **Default URLs**: System generates default URLs based on server configuration
+- **Customization**: Users can update server URL, WebSocket URL, and API endpoint
+- **Persistence**: All URL configurations are stored in the database and survive system restarts
+- **Migration**: Existing devices without configurations can be migrated using the migration endpoint
+- **Validation**: URL formats are validated before saving
+- **Version Control**: Configuration changes are timestamped for audit purposes
 
 #### Device Limits
 - **No Hard Limit**: Users can register unlimited devices (can be restricted in future)
@@ -145,9 +155,12 @@ POST /osmand/tracker?lat={lat}&lon={lon}&timestamp={timestamp}&key={secret_key}
 #### Device Setup Process
 1. User creates device in dashboard
 2. System generates unique device ID and secret key
-3. User configures OsmAnd with generated URL
-4. Device starts sending location data
-5. User can monitor device in real-time
+3. System automatically creates device configuration with default URLs
+4. User can update device URLs if needed (server, WebSocket, API endpoint)
+5. User configures OsmAnd with the device URLs
+6. Device starts sending location data
+7. User can monitor device in real-time
+8. URLs persist across system restarts and updates
 
 #### Security Incident Response
 1. Monitor login attempts and failed authentications
